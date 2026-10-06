@@ -1,0 +1,11 @@
+data/
+*.parquet
+*.csv
+.env
+*.env
+profiles.yml
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+INTERVIEW_NOTES.md
+INTERVIEW_STORIES.md
