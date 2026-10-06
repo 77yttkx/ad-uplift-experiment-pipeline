@@ -1,6 +1,7 @@
 data/
 *.parquet
 *.csv
+*.csv.gz
 .env
 *.env
 profiles.yml
