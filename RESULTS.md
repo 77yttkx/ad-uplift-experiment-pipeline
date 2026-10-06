@@ -7,7 +7,8 @@ Assumed ad cost / conversion value / profit must be labeled simulation / assumpt
 
 | Metric | Value | Evidence / script |
 |---|---|---|
-| Raw rows | TODO | |
+| Raw rows | 13,979,592 | `wc -l` = 13,979,593 minus 1 header line |
+| Raw file | criteo-uplift-v2.1.csv, 3,248,115,221 bytes | SHA-256 e4d7c710ca1f38e523309d0f8a0745d1b53e7392d51f20d1088b6cfeaef222ef |
 | Parquet rows | TODO | |
 | S3 object (key, size) | TODO | |
 

@@ -6,9 +6,9 @@ Status: In Progress — A1 data foundation
 
 - Source: [Criteo Uplift Prediction Dataset](https://ailab.criteo.com/?p=859)
 - License: CC BY-NC-SA 4.0 (non-commercial). The dataset is not included in this repo and is subject to its own license.
-- Version used: TODO
-- File: TODO (name, size, SHA-256)
-- Rows: TODO; columns: 16 (f0–f11, treatment, conversion, visit, exposure)
+- Version used: v2.1 (13,979,592-row version on the Criteo page)
+- File: `criteo-uplift-v2.1.csv`, 3,248,115,221 bytes (~3.0 GiB), SHA-256 `e4d7c710ca1f38e523309d0f8a0745d1b53e7392d51f20d1088b6cfeaef222ef`
+- Rows: 13,979,592 (13,979,593 lines including header); columns: 16 (f0–f11, treatment, conversion, visit, exposure)
 
 ## License and Data Use
 
