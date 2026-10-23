@@ -12,19 +12,39 @@ Assumed ad cost / conversion value / profit must be labeled simulation / assumpt
 | Parquet rows | TODO | |
 | S3 object (key, size) | TODO | |
 
+## Data Validation (Day 1, descriptive)
+
+| Check | Result | Evidence / script |
+|---|---|---|
+| Missing values | 0 in all 16 columns | `src/validation/explore.py` |
+| treatment / conversion / visit / exposure binary | all only 0 and 1 | `src/validation/checks.py` |
+| conversion = 1 AND visit = 0 | 0 rows (conversion is a subset of visit) | `src/validation/checks.py` |
+| treatment = 0 AND exposure = 1 | 0 rows | `src/validation/checks.py` |
+| Exposure rate, treatment group | 3.60% (428,212 of 11,882,655) | `src/validation/checks.py` |
+
 ## Experiment
+
+Descriptive numbers only (raw rates). No test has been run yet: CI, p-value and SRM come in A3.
 
 | Metric | Value | Evidence / script |
 |---|---|---|
-| Treatment N / Control N | TODO | |
-| Conversion rate (T / C) | TODO | |
-| Visit rate (T / C) | TODO | |
-| Absolute lift / relative lift | TODO | |
+| Treatment N / Control N | 11,882,655 (85.0%) / 2,096,937 (15.0%) | `explore.py`, `checks.py` |
+| Conversion rate (T / C) | 0.3089% / 0.1938% | `explore.py`, `checks.py` |
+| Visit rate (T / C) | 4.8543% / 3.8201% | `checks.py` |
+| Absolute lift / relative lift (raw, untested) | about +0.115 pp / about +59.4% | computed from the rates above |
 | 95% CI | TODO | |
 | p-value | TODO | |
-| SRM p-value | TODO | |
+| SRM p-value (expected split 85/15, not 50/50) | TODO | |
 | MDE / power | TODO | |
 | Variance reduction (covariate adjustment) | TODO | |
+
+Conversion rate by treatment x exposure (for the exposure-selection finding, see PROJECT_LOG):
+
+| Group | Users | Visit rate | Conversion rate |
+|---|---|---|---|
+| Control | 2,096,937 | 3.8201% | 0.1938% |
+| Treatment, not exposed | 11,454,443 | 3.4861% | 0.1194% |
+| Treatment, exposed | 428,212 | 41.4538% | 5.3784% |
 
 ## Uplift Modeling
 

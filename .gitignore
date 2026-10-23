@@ -10,3 +10,6 @@ __pycache__/
 .ipynb_checkpoints/
 INTERVIEW_NOTES.md
 INTERVIEW_STORIES.md
+
+# PyCharm / JetBrains IDE
+.idea/
