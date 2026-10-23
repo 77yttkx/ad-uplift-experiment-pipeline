@@ -13,3 +13,9 @@ INTERVIEW_STORIES.md
 
 # PyCharm / JetBrains IDE
 .idea/
+
+# Generated analysis outputs (regenerate with the scripts in src/)
+outputs/
+
+# pytest
+.pytest_cache/
