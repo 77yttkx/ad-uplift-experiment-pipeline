@@ -78,3 +78,24 @@ Only record important decisions, meaningful bugs, failed validations, surprising
 - Problem: The visit p-value underflows to 0.0 in double precision. It is reported as "< 1e-300 (underflow)", not as exactly zero.
 - Open: SRM check, MDE / power, variance reduction, uplift modeling, business simulation, and the Parquet / S3 / cloud steps are not done.
 - Learned: With millions of users, p-values stop being informative; the effect size and its interval carry the information.
+
+### 2026-10-30: Do not run a formal SRM test on the released dataset
+
+- Date: 2026-10-30
+- Context: Day 1 showed an 85/15 treatment/control split, and the plan includes an SRM check. Criteo's dataset page lists a treatment ratio of .846 for the original release and .85 for the un-biased version, says the data was sub-sampled non-uniformly so that the original incrementality level cannot be deduced, and does not state the original randomization probability.
+- Decision / Problem: How to check the sample ratio when the prespecified assignment probability of the original experiment is unknown?
+- Alternatives: (1) Test the observed counts against 85/15. (2) Test against 50/50. (3) Report counts and proportions descriptively and mark the formal SRM status as not assessable.
+- Why: An SRM test is only valid against the probability prespecified for the experiment that produced the data. 85/15 is a property of the release, so option 1 would test whether the release matches its own published ratio, and a "pass" would be uninformative and easy to misread as evidence of valid randomization. Option 2 is simply wrong for this data.
+- Validation: The observed counts are 2,096,937 control and 11,882,655 treatment, within 2 users of the published split. That describes the release and does not tell us about the original assignment.
+- Result: Option 3. The formal SRM status is `not_assessable`, and no SRM test statistic or p-value was calculated. The A/B results are described as relying on the provider's description of random assignment.
+- Learned: A test needs the right null hypothesis. "Not assessable" is a legitimate, defensible result and is not the same as "passed".
+
+### 2026-10-30: SRM diagnostics: implementation and local verification
+
+- Date: 2026-10-30
+- Context: Implemented the descriptive sample ratio diagnostics in `src/validation/srm_check.py`, with unit tests in `tests/test_srm_check.py`.
+- Implementation: DuckDB counts users per `treatment` group straight from the CSV and rejects data unless the groups are exactly 0 and 1. Pure functions compute the observed proportions, compare them with the published 15/85 split (observed minus reference, no threshold), and decide the assessment. The assessment returns `not_assessable` without a verified assignment probability, and it refuses to return a result if one is supplied, so a formal test has to be added deliberately. The JSON report (`outputs/srm_results.json`, git-ignored) holds the counts, proportions, reference, source limitations and status, and has no p-value or statistic fields.
+- Validation: 50 unit tests cover the proportion arithmetic, invalid group counts (zero, negative, non-integer), the comparison with the reference, the assessment logic, the report structure and the DuckDB counting. All 81 tests of the full suite (31 existing + 50 new) pass on a Mac. The 50 new tests also pass in a scratch environment and in a second Linux environment on Python 3.10. Seven deliberate code breakages, including one that claimed a formal test had been performed, were each caught by the tests.
+- Result: Run on the full 13,979,592-row file on a Mac. Control 2,096,937 (14.999987%), treatment 11,882,655 (85.000013%), status `not_assessable`, JSON generated. The file size and SHA-256 recorded in the JSON match the README.
+- Open: MDE / power, variance reduction, uplift modeling, business simulation, and the Parquet / S3 / cloud steps are not done.
+- Learned: Keeping the report free of test fields, and testing for that, makes it hard to later cite a p-value that was never computed.

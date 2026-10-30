@@ -16,5 +16,5 @@ Checked in `src/validation/explore.py` and `src/validation/checks.py`.
 ## Notes
 
 - Primary outcome: conversion. Secondary outcome: visit.
-- The 85/15 split is part of the dataset design. SRM checks must use 85/15 as the expected ratio.
+- The 85/15 split describes the released dataset (Criteo lists a treatment ratio of .85 for this version). It is not a verified prespecified assignment probability, so it is used only as a descriptive reference. The formal SRM status is `not_assessable` (see RESULTS.md).
 - Conversion is a rare event (under 0.4% in both groups).

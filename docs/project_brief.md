@@ -22,6 +22,6 @@ Arms are defined by `treatment` (random assignment), not by `exposure`.
 
 ## Success criteria
 - A1: raw data loaded, validated and reconciled; row counts match across every stage.
-- A3: effect estimate with 95% CI and p-value; SRM check passed with an 85/15 expected ratio; MDE and power reported.
+- A3: effect estimate with 95% CI and p-value; sample ratio diagnostics reported descriptively, with the formal SRM status stated as it is (currently `not_assessable`); MDE and power reported.
 - A4: uplift model beats a random-targeting baseline on a held-out set (Qini / AUUC).
 - A5: top-k% policy compared against targeting everyone, with assumed cost and value labeled as simulation.
