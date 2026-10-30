@@ -112,12 +112,78 @@ Interpretation and limits:
 - **What would make it assessable.** An independently verified assignment probability for the data as released: the original prespecified probability plus documentation that the release did not change the arm proportions, or a documented sampling scheme from which the expected released proportion can be derived.
 - **Consequence for the A/B results.** They rely on the provider's description of random assignment, which nothing in this repository can confirm or contradict.
 
+### Power analysis and minimum detectable effect (MDE)
+
+Conditional sensitivity analysis, not verified power of the original experiment. Criteo states that the public data was sub-sampled non-uniformly and does not state the original randomization probability, and the formal SRM status is `not_assessable`. The calculations below take the released sample's group sizes and control conversion rate as given and ask what a two-proportion z-test could detect under a normal-approximation model. They do not show that the public sample represents the original experimental design.
+
+**Design assumptions** (applied to the released sample; `outputs/power_analysis_results.json`, `design_assumptions`)
+
+| Assumption | Value |
+|---|---|
+| Test | Two-sided two-proportion z-test, unequal group sizes |
+| Significance level (alpha) | 0.05 |
+| Target power | 0.8 |
+| Baseline conversion rate (control conversions / control n, same data) | 0.193759% (4,063 / 2,096,937) |
+| Control n | 2,096,937 |
+| Treatment n | 11,882,655 (85.0000% of users) |
+
+**Minimum detectable effect** at alpha = 0.05, power = 0.8
+
+| Metric | Value |
+|---|---|
+| Absolute MDE | 9.3692e-05 (0.009369 percentage points) |
+| Relative MDE | 4.8355% of the baseline |
+| Treatment rate at the MDE | 0.203128% |
+| Power at the solved MDE | 0.800000000000 (root solver converged in 21 iterations) |
+
+**Theoretical power at assumed relative lifts** (same sample sizes and baseline; hypothetical effects, not findings)
+
+| Assumed relative lift | Power |
+|---|---|
+| 1% (absolute +0.00194 pp) | 0.089265 |
+| 5% (absolute +0.00969 pp) | 0.825518 |
+| 10% (absolute +0.01938 pp) | 0.999931 |
+| 20% (absolute +0.03875 pp) | 1.000000 |
+
+Power at a 1% relative lift is low (8.9%): an effect that small would usually go undetected with these group sizes. Power at 5% is 82.6%, just above the 80% target, consistent with the MDE of about 4.84%.
+
+**Post-hoc power at the observed lift (descriptive only).** At the observed relative lift of 59.45%, the same formula gives power of 1.0, with a type II error probability of about 4.0e-214. This does not validate the experiment. Post-hoc power is a function of the observed effect and the sample size, so it adds no information beyond the p-value, and it says nothing about randomization, selection into the sample, or whether the effect would generalize. The observed lift is also about 12 times the MDE, so a power near 1 is expected and carries no further meaning.
+
+**Hypothetical allocation comparison** (HYPOTHETICAL: not how users were assigned). Total sample size (13,979,592) and the baseline rate are held fixed; only the treatment share changes. The reference lift for the power column is 5% relative.
+
+| Scenario | Control n | Treatment n | Relative MDE | Power at a 5% relative lift |
+|---|---|---|---|---|
+| 50/50 (hypothetical) | 6,989,796 | 6,989,796 | 3.430% | 0.9825 |
+| 15/85 (the released split, rounded share) | 2,096,939 | 11,882,653 | 4.835% | 0.8255 |
+
+The 15/85 row uses a rounded treatment share, so its group sizes differ from the observed counts by 2 users and its MDE matches the observed-size MDE above to four significant figures. In this model a balanced split would detect a smaller effect (relative MDE 3.43% vs 4.84%). This shows the cost of unbalanced allocation only. It is not a recommendation about the original design. The file also contains scenarios for treatment shares of 5%, 10%, 15%, 30%, 70% and 95%.
+
+Code: `src/experimentation/power_analysis.py` (pure functions plus a CLI; it reads no dataset) and `tests/test_power_analysis.py` (72 pytest tests). Method: null standard error pooled at the expected pooled probability, alternative standard error unpooled, both rejection tails included, and the MDE found with `scipy.optimize.brentq` rather than an equal-allocation shortcut. The full formulas are in the JSON `methodology` block and the module docstring.
+
+Reproduce (from the project root, with `.venv` active):
+
+```bash
+python -m pytest tests/test_power_analysis.py
+python src/experimentation/power_analysis.py     # or: python -m src.experimentation.power_analysis
+```
+
+Verification: the full suite (153 tests) passed on a Mac, the JSON was generated, and the script's built-in check of its constants against `outputs/ab_test_results.json` reported `consistent`.
+
+Limits specific to this section:
+
+- **Normal approximation.** The null standard error uses the expected pooled probability implied by the assumed rates, not a sample-specific value.
+- **Baseline has sampling error.** The baseline is the control rate from the same data, and that error is not propagated into the MDE.
+- **Assumes independent, simple-random assignment.** Clustering, interference and non-compliance are not modelled.
+- **Conversion only, assignment not exposure.** Only 3.60% of the treatment group was exposed, so an intent-to-treat effect is diluted relative to an effect per exposed user.
+- **Direction.** The MDE is for an increase in conversion (treatment above control).
+- **No business meaning yet.** Whether an effect near the MDE matters commercially has not been assessed.
+
 ### Still open in this section
 
 | Metric | Value | Evidence / script |
 |---|---|---|
 | Formal SRM test | Not assessable: no verified original assignment probability, so no p-value was calculated (see "Sample ratio diagnostics (SRM)") | `srm_check.py` |
-| MDE / power | Not done | |
+| MDE / power | Done as a conditional sensitivity analysis only, not verified power of the original design (see "Power analysis and minimum detectable effect (MDE)") | `power_analysis.py` |
 | Variance reduction (covariate adjustment) | Not done | |
 
 ### Interpretation limits
