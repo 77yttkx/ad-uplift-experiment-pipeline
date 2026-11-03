@@ -14,7 +14,9 @@ Assumed ad cost / conversion value / profit must be labeled simulation / assumpt
 | Parquet SHA-256 | f2e6f26b68cdbb1ff4f04f58d095f9792b15355dc093d86e56447cf806e42a12 | same |
 | Size reduction vs. CSV | 94.28% smaller (17.5x) | computed from the two byte sizes above |
 | Conversion validation | 28 of 28 checks passed (see "Parquet conversion validation") | same |
-| S3 object (key, size) | TODO | |
+| S3 object (bucket / key) | `s3://ad-uplift-projecta-7k29m/raw/criteo-uplift-v2.1.parquet` | AWS CLI, profile `projecta` (see "S3 raw storage") |
+| S3 object size | 185,895,062 bytes (`ContentLength`), equal to the local Parquet size | same |
+| S3 checksum verification | SHA-256 of the object downloaded from S3 equals the local Parquet SHA-256 `f2e6f26b68cdbb1ff4f04f58d095f9792b15355dc093d86e56447cf806e42a12` | same |
 
 ## Parquet conversion validation
 
@@ -56,7 +58,33 @@ Limits:
 - The checks show that the Parquet file matches the CSV as parsed with this schema. They do not show that the dataset is correct, representative, or free of upstream problems.
 - The content fingerprint is an order-independent sum of hashes. It is a consistency check, not a cryptographic proof, and it does not check row order (the conversion preserves it).
 - The expected counts apply to this v2.1 file only.
-- The Parquet file and the CSV stay local and git-ignored. **No S3 upload, Snowflake load or dbt model exists yet**, so the "S3 object" row above is still TODO.
+- The Parquet file and the CSV stay local and git-ignored. The Parquet file has since been uploaded to S3 (see "S3 raw storage"). **No Snowflake load or dbt model exists yet.**
+
+## S3 raw storage
+
+The validated Parquet file was uploaded to a private S3 bucket as the raw layer. This section records what was set up and checked. The AWS checks were done by hand with the AWS CLI by the project owner; no script in this repo reproduces them, and this repo has no AWS credentials.
+
+| Item | Value |
+|---|---|
+| Bucket | `ad-uplift-projecta-7k29m` |
+| Object key | `raw/criteo-uplift-v2.1.parquet` |
+| Object size (S3 `ContentLength`) | 185,895,062 bytes |
+| Local Parquet size | 185,895,062 bytes (equal) |
+| Local Parquet SHA-256 | f2e6f26b68cdbb1ff4f04f58d095f9792b15355dc093d86e56447cf806e42a12 |
+| SHA-256 of the object downloaded back from S3 | equal to the local SHA-256 |
+| Access | Private bucket, S3 Block Public Access on, SSE-S3 encryption |
+| Credentials used | Dedicated IAM user `projecta-s3-uploader` through the AWS CLI profile `projecta` |
+| IAM policy | Customer-managed policy `ProjectA-S3-ReadWrite` (default version 1), attached to `projecta-s3-uploader`; allows only `s3:ListBucket` and `s3:GetBucketLocation` on the bucket, and `s3:GetObject` and `s3:PutObject` on its objects. Copy: `docs/aws_iam_policy.json` |
+| Account safeguards | MFA on the AWS root user; monthly cost budget of $5 USD with 3 alerts (actual 85% = $4.25, actual 100% = $5.00, forecasted 100% = $5.00). Notifications only, not a spending cap |
+
+What this shows: the bytes stored in S3 are identical to the validated local Parquet file, whose content matches the CSV (see "Parquet conversion validation"). The checksum comparison covers the object as stored, not only the upload command's exit status.
+
+Limits:
+
+- **Manual verification.** The size and checksum comparison was run by hand. It is not part of an automated test.
+- **IAM verification is partial.** The policy above was read in the AWS Console on 2026-11-03, and the console shows it attached to `projecta-s3-uploader`. The user's complete effective permissions (other attached or inline policies, group policies, permissions boundaries, bucket policy) were not audited, so this does not prove the user has no other access.
+- **Budgets notify, they do not cap.** AWS Budgets sends alerts. It does not stop usage, and it does not show that spending is zero or that the project cannot incur charges.
+- **Raw layer only.** This is storage. The Snowflake stage, `COPY INTO` load and dbt models are not done.
 
 ## Data Validation (Day 1, descriptive)
 
