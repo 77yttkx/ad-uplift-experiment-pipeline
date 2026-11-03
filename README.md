@@ -39,6 +39,49 @@ shasum -a 256 data/criteo-uplift-v2.1.parquet /tmp/check.parquet                
 
 A Parquet file you rebuild may differ byte-for-byte from the one recorded in `RESULTS.md`, so compare against your own `outputs/parquet_conversion_report.json`, not against my checksum.
 
+## Running the analysis stages
+
+Every stage reads `data/criteo-uplift-v2.1.csv` and writes a JSON report to `outputs/`
+(both are git-ignored). Run them from the project root; `make <stage>` does the same
+inside `.venv`.
+
+| Stage | Command | Writes |
+|---|---|---|
+| Explore | `python -m src.validation.explore` | `outputs/explore_results.json` |
+| Checks | `python -m src.validation.checks` | `outputs/checks_results.json` |
+| SRM diagnostics | `python -m src.validation.srm_check` | `outputs/srm_results.json` |
+| A/B test | `python -m src.experimentation.ab_test` | `outputs/ab_test_results.json` |
+| Power / MDE | `python -m src.experimentation.power_analysis` | `outputs/power_analysis_results.json` |
+| Ingest | `python -m src.ingestion.csv_to_parquet` | Parquet + `outputs/parquet_conversion_report.json` |
+
+`--data` points a stage at another CSV and `--output` moves the report. `checks` exits
+1 when a binary column holds a value other than 0 or 1 (the printed line names the
+column) and 2 when the CSV is missing, so it can gate a pipeline step.
+
+The exploratory stages are importable as a library: nothing runs at import time and
+no function prints or reads the file unless it is asked to.
+
+```python
+from src.validation.checks import run_checks
+report = run_checks("data/criteo-uplift-v2.1.csv")  # dict, no printing, no files
+```
+
+### Planning a sample size
+
+`power_analysis` covers both directions of the normal approximation: the effect a
+sample can detect (MDE) and the sample a chosen effect needs.
+
+```python
+from src.experimentation.power_analysis import required_sample_size
+
+required_sample_size(0.0019, relative_lift=0.05, allocation_ratio=1.0)
+# -> n_control / n_treatment per arm, the smallest sizes that reach 80% power
+```
+
+The answer is verified, not just solved: power at the returned size reaches the
+target and power one control user lower does not. The saved report includes the same
+table for the 1%, 5%, 10% and 20% lifts at the observed allocation ratio.
+
 ## License and Data Use
 
 Code in this repository is released under the MIT License (see `LICENSE`). The raw dataset and any user-level tables derived from it are not redistributed here. Published results are aggregates only, and any assumed ad cost, conversion value or profit is labeled as simulation / assumption.
