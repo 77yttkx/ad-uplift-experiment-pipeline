@@ -27,6 +27,11 @@ group sizes, delta = p1 - p0, and z = Phi^-1(1 - alpha/2) for a two-sided test.
   Both rejection tails are included.
 * MDE: the positive delta for which power equals the target, found with
   ``scipy.optimize.brentq``. No equal-allocation or fixed effect-size shortcut.
+* Sample size: the inverse question. For one effect and one allocation ratio, the
+  smallest ``n_control`` whose power reaches the target, solved with
+  ``scipy.optimize.brentq`` over ``log(n)`` and then rounded up. The returned
+  sizes are verified: power at ``n_control`` reaches the target and power at
+  ``n_control - 1`` does not.
 
 Interpretation limits
 ---------------------
@@ -72,6 +77,9 @@ ALLOCATION_REFERENCE_RELATIVE_LIFT = 0.05
 
 SOLVER_XTOL = 1e-15
 SOLVER_MAXITER = 200
+#: Upper bound for the sample-size search; beyond this the required size is not
+#: a useful planning answer, so the search reports failure instead of guessing.
+MAX_SAMPLE_SIZE = 1_000_000_000
 
 LIMITATIONS = [
     "The Criteo public dataset is a released, non-uniformly sub-sampled research sample "
@@ -91,6 +99,9 @@ LIMITATIONS = [
     "not evidence that the study is valid.",
     "Allocation-ratio scenarios are hypothetical: they hold total sample size and the "
     "baseline rate fixed and say nothing about how users were actually assigned.",
+    "The sample-size table is a planning calculation at the observed allocation ratio. "
+    "It inherits every assumption above and is not a claim about how many users the "
+    "original experiment had or should have had.",
 ]
 
 
@@ -174,7 +185,58 @@ class MdeResult:
         return data
 
 
+@dataclass(frozen=True)
+class SampleSizeResult:
+    """Smallest per-arm sizes that reach the target power for one effect."""
+
+    p_control: float
+    p_treatment: float
+    absolute_effect: float
+    relative_effect: float
+    alpha: float
+    target_power: float
+    allocation_ratio: float
+    n_control: int
+    n_treatment: int
+    total_n: int
+    achieved_power: float
+    power_at_one_fewer_control: float
+    solver_iterations: int
+    solver_function_calls: int
+    solver_converged: bool
+    solver_log_bracket: tuple[float, float]
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["solver_log_bracket"] = list(self.solver_log_bracket)
+        return data
+
+
 # ----------------------------------------------------------------- calculations
+
+
+def _power_terms(
+    p0: float, p1: float, n0: float, n1: float, alpha: float
+) -> tuple[float, float, float, float, float, float]:
+    """Critical z, pooled rate, both standard errors and both rejection bounds.
+
+    ``n0``/``n1`` are floats so the sample-size solver can work on the same
+    formula the integer calculation uses.
+    """
+    delta = p1 - p0
+    z = float(norm.isf(alpha / 2))
+    pooled = (n0 * p0 + n1 * p1) / (n0 + n1)
+    se_null = math.sqrt(pooled * (1 - pooled) * (1 / n0 + 1 / n1))
+    se_alt = math.sqrt(p0 * (1 - p0) / n0 + p1 * (1 - p1) / n1)
+    upper = (z * se_null - delta) / se_alt
+    lower = (-z * se_null - delta) / se_alt
+    return z, pooled, se_null, se_alt, upper, lower
+
+
+def _power_float(p0: float, p1: float, n0: float, n1: float, alpha: float) -> float:
+    """Power of the two-sided test for real-valued sizes (solver use only)."""
+    _, _, _, _, upper, lower = _power_terms(p0, p1, n0, n1, alpha)
+    return float(norm.sf(upper) + norm.cdf(lower))
 
 
 def power_two_proportions(
@@ -197,13 +259,7 @@ def power_two_proportions(
     alpha = _probability("alpha", alpha)
 
     delta = p1 - p0
-    z = float(norm.isf(alpha / 2))
-    pooled = (n0 * p0 + n1 * p1) / (n0 + n1)
-    se_null = math.sqrt(pooled * (1 - pooled) * (1 / n0 + 1 / n1))
-    se_alt = math.sqrt(p0 * (1 - p0) / n0 + p1 * (1 - p1) / n1)
-
-    upper = (z * se_null - delta) / se_alt
-    lower = (-z * se_null - delta) / se_alt
+    z, pooled, se_null, se_alt, upper, lower = _power_terms(p0, p1, n0, n1, alpha)
     power = float(norm.sf(upper) + norm.cdf(lower))
     # P(not reject) = CDF(upper) - CDF(lower); use the tail that avoids cancellation.
     if delta >= 0:
@@ -296,6 +352,176 @@ def minimum_detectable_effect(
         solver_converged=bool(info.converged),
         solver_bracket=(low, high),
     )
+
+
+def required_sample_size(
+    p_control: float,
+    *,
+    relative_lift: float | None = None,
+    absolute_effect: float | None = None,
+    alpha: float = DEFAULT_ALPHA,
+    power: float = DEFAULT_TARGET_POWER,
+    allocation_ratio: float = 1.0,
+    xtol: float = SOLVER_XTOL,
+    maxiter: int = SOLVER_MAXITER,
+    max_sample_size: int = MAX_SAMPLE_SIZE,
+) -> SampleSizeResult:
+    """Smallest per-arm sizes that detect one effect with the target power.
+
+    The inverse of :func:`minimum_detectable_effect`: instead of asking what effect
+    a fixed sample can detect, ask how much sample a chosen effect needs. Give
+    exactly one of ``relative_lift`` (treatment = control * (1 + lift)) or
+    ``absolute_effect`` (treatment = control + effect); ``allocation_ratio`` is
+    ``n_treatment / n_control``.
+
+    The continuous solution is found with Brent's method over ``log(n_control)``
+    and then rounded up. The returned sizes are checked: power at ``n_control``
+    reaches the target and power at ``n_control - 1`` does not, so the answer is
+    the smallest sample that does the job rather than a solver artefact.
+
+    Raises:
+        TypeError: a probability, effect or ratio is not a real number, or
+            ``max_sample_size`` is not an integer.
+        ValueError: a probability or alpha is outside (0, 1), the effect is not
+            positive or pushes the treatment probability to 1, the target power is
+            not above alpha, the allocation ratio is not positive, both or neither
+            effect was given, or the target cannot be reached within
+            ``max_sample_size`` per arm.
+        RuntimeError: the root solver did not converge.
+    """
+    p0 = _probability("p_control", p_control)
+    alpha = _probability("alpha", alpha)
+    target = _probability("power", power)
+    if target <= alpha:
+        raise ValueError(
+            f"target power ({target}) must exceed alpha ({alpha}); a two-sided test "
+            "has power alpha at zero effect"
+        )
+    ratio = _real("allocation_ratio", allocation_ratio)
+    if ratio <= 0:
+        raise ValueError(f"allocation_ratio must be positive, got {ratio}")
+    ceiling = _count("max_sample_size", max_sample_size)
+
+    if (relative_lift is None) == (absolute_effect is None):
+        raise ValueError(
+            "provide exactly one of relative_lift or absolute_effect; "
+            f"got relative_lift={relative_lift}, absolute_effect={absolute_effect}"
+        )
+    if relative_lift is not None:
+        lift = _real("relative_lift", relative_lift)
+        if lift <= 0:
+            raise ValueError(f"relative_lift must be positive, got {lift}")
+        delta = p0 * lift
+    else:
+        delta = _real("absolute_effect", absolute_effect)
+        if delta <= 0:
+            raise ValueError(f"absolute_effect must be positive, got {delta}")
+    p1 = p0 + delta
+    if p1 >= 1.0:
+        raise ValueError(
+            f"the effect {delta} puts the treatment probability at {p1}, which must stay "
+            f"below 1 (control probability {p0})"
+        )
+
+    def continuous_gap(log_n: float) -> float:
+        n0 = math.exp(log_n)
+        return _power_float(p0, p1, n0, ratio * n0, alpha) - target
+
+    def integer_power(n_control: int) -> float:
+        n_treatment = max(1, math.ceil(ratio * n_control))
+        return power_two_proportions(p0, p1, n_control, n_treatment, alpha).power
+
+    low = 0.0
+    high = math.log(ceiling)
+    if continuous_gap(high) < 0:
+        raise ValueError(
+            "target power cannot be reached within max_sample_size="
+            f"{ceiling} control users (power there is about {continuous_gap(high) + target:.4f})"
+        )
+
+    if continuous_gap(low) >= 0:
+        n_control = 1
+        info = None
+    else:
+        solution, info = brentq(
+            continuous_gap, low, high, xtol=xtol, rtol=4 * numpy.finfo(float).eps,
+            maxiter=maxiter, full_output=True, disp=False,
+        )
+        if not info.converged:
+            raise RuntimeError(f"sample-size root solver did not converge: {info.flag}")
+        n_control = max(1, math.ceil(math.exp(solution)))
+
+    # Rounding and floating-point noise can leave the integer answer just short of
+    # (or just above) the boundary: walk to the smallest n that reaches the target.
+    while integer_power(n_control) < target and n_control < ceiling:
+        n_control += 1
+    while n_control > 1 and integer_power(n_control - 1) >= target:
+        n_control -= 1
+
+    n_treatment = max(1, math.ceil(ratio * n_control))
+    achieved = integer_power(n_control)
+    if achieved < target:
+        raise RuntimeError(
+            f"sample-size search stopped at n_control={n_control} without reaching the "
+            f"target power ({achieved:.6f} < {target})"
+        )
+    return SampleSizeResult(
+        p_control=p0,
+        p_treatment=p1,
+        absolute_effect=delta,
+        relative_effect=delta / p0,
+        alpha=alpha,
+        target_power=target,
+        allocation_ratio=ratio,
+        n_control=n_control,
+        n_treatment=n_treatment,
+        total_n=n_control + n_treatment,
+        achieved_power=achieved,
+        power_at_one_fewer_control=integer_power(n_control - 1) if n_control > 1 else 0.0,
+        solver_iterations=0 if info is None else int(info.iterations),
+        solver_function_calls=0 if info is None else int(info.function_calls),
+        solver_converged=True if info is None else bool(info.converged),
+        solver_log_bracket=(low, high),
+    )
+
+
+def sample_size_for_relative_lifts(
+    p_control: float,
+    n_control: int,
+    n_treatment: int,
+    relative_lifts: tuple[float, ...] = RELATIVE_LIFTS,
+    alpha: float = DEFAULT_ALPHA,
+    power: float = DEFAULT_TARGET_POWER,
+) -> list[dict[str, Any]]:
+    """Per-arm sample size for each relative lift, at the given allocation ratio."""
+    n0 = _count("n_control", n_control)
+    n1 = _count("n_treatment", n_treatment)
+    ratio = n1 / n0
+    rows = []
+    for lift in relative_lifts:
+        lift = _real("relative_lift", lift)
+        result = required_sample_size(
+            p_control,
+            relative_lift=lift,
+            alpha=alpha,
+            power=power,
+            allocation_ratio=ratio,
+        )
+        rows.append(
+            {
+                "relative_lift": lift,
+                "relative_lift_percent": lift * 100,
+                "absolute_effect": result.absolute_effect,
+                "absolute_effect_percentage_points": result.absolute_effect * 100,
+                "treatment_probability": result.p_treatment,
+                "allocation_ratio_treatment_over_control": result.allocation_ratio,
+                "n_control": result.n_control,
+                "n_treatment": result.n_treatment,
+                "total_n": result.total_n,
+                "achieved_power": result.achieved_power,
+            }
+        )
+    return rows
 
 
 def power_for_relative_lifts(
@@ -407,6 +633,9 @@ def build_report(
 
     mde = minimum_detectable_effect(p0, CONTROL_N, TREATMENT_N, alpha, target_power)
     by_lift = power_for_relative_lifts(p0, CONTROL_N, TREATMENT_N, RELATIVE_LIFTS, alpha)
+    planning = sample_size_for_relative_lifts(
+        p0, CONTROL_N, TREATMENT_N, RELATIVE_LIFTS, alpha, target_power
+    )
     observed = power_two_proportions(p0, p1, CONTROL_N, TREATMENT_N, alpha)
     allocation = allocation_sensitivity(
         p0, CONTROL_N + TREATMENT_N, ALLOCATION_TREATMENT_SHARES, alpha, target_power
@@ -446,6 +675,7 @@ def build_report(
             "n_control": CONTROL_N,
             "n_treatment": TREATMENT_N,
             "treatment_share": TREATMENT_N / (CONTROL_N + TREATMENT_N),
+            "allocation_ratio_treatment_over_control": TREATMENT_N / CONTROL_N,
         },
         "observed_data": {
             "control": {"n": CONTROL_N, "conversions": CONTROL_CONVERSIONS, "rate": p0},
@@ -458,6 +688,7 @@ def build_report(
         "results": {
             "mde": mde.to_dict(),
             "power_by_relative_lift": by_lift,
+            "required_sample_size_by_relative_lift": planning,
         },
         "post_hoc_descriptive": {
             "label": "POST-HOC DESCRIPTIVE: power evaluated at the observed lift",
@@ -502,6 +733,14 @@ def print_report(report: dict[str, Any]) -> None:
     print("\nPower by assumed relative lift:")
     for row in report["results"]["power_by_relative_lift"]:
         print(f"  {row['relative_lift_percent']:>5.1f}%  power = {row['power']:.4f}")
+    print("\nSample size per arm for that target power (observed allocation ratio "
+          f"{report['design_assumptions']['allocation_ratio_treatment_over_control']:.2f}:1):")
+    for row in report["results"]["required_sample_size_by_relative_lift"]:
+        print(
+            f"  {row['relative_lift_percent']:>5.1f}%  control {row['n_control']:,} + "
+            f"treatment {row['n_treatment']:,} = {row['total_n']:,} users "
+            f"(power {row['achieved_power']:.4f})"
+        )
     post = report["post_hoc_descriptive"]["result"]
     print(
         f"\n[POST-HOC, descriptive only] power at observed lift "
