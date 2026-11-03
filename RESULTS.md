@@ -9,8 +9,54 @@ Assumed ad cost / conversion value / profit must be labeled simulation / assumpt
 |---|---|---|
 | Raw rows | 13,979,592 | `wc -l` = 13,979,593 minus 1 header line |
 | Raw file | criteo-uplift-v2.1.csv, 3,248,115,221 bytes | SHA-256 e4d7c710ca1f38e523309d0f8a0745d1b53e7392d51f20d1088b6cfeaef222ef |
-| Parquet rows | TODO | |
+| Parquet rows | 13,979,592 (equal to the CSV row count) | `src/ingestion/csv_to_parquet.py` -> `outputs/parquet_conversion_report.json` |
+| Parquet file | criteo-uplift-v2.1.parquet, 185,895,062 bytes (114 row groups, ZSTD) | same |
+| Parquet SHA-256 | f2e6f26b68cdbb1ff4f04f58d095f9792b15355dc093d86e56447cf806e42a12 | same |
+| Size reduction vs. CSV | 94.28% smaller (17.5x) | computed from the two byte sizes above |
+| Conversion validation | 28 of 28 checks passed (see "Parquet conversion validation") | same |
 | S3 object (key, size) | TODO | |
+
+## Parquet conversion validation
+
+The CSV was converted to Parquet with DuckDB, which streams the file, so the dataset was not loaded into Python or pandas memory. Nothing was filtered, deduplicated, rounded, recoded or imputed. Local run on a Mac (report generated 2026-10-30T21:51:20+00:00, Python 3.12.7, DuckDB 1.5.6, DuckDB memory limit 3GB). The run took 22.5 s end to end, including both SHA-256 computations and the validation scans. That is one local run on one machine, not a benchmark.
+
+| Metric | Value | Evidence / script |
+|---|---|---|
+| Overall status | `passed`; no failed checks | `outputs/parquet_conversion_report.json` |
+| Rows, CSV (DuckDB parse) / Parquet | 13,979,592 / 13,979,592 | same |
+| Physical lines in CSV, counted independently | 13,979,593 (rows plus 1 header line) | same |
+| Columns | 16, in the original CSV order: f0 to f11 as DOUBLE; treatment, conversion, visit, exposure as INTEGER | same |
+| Missing values / non-finite features / non-binary values | 0 / 0 / 0, in both the CSV and the Parquet | same |
+| Group sizes | control 2,096,937; treatment 11,882,655 | same |
+| Conversions (control / treatment) | 4,063 / 36,711 | same |
+| Visits (control / treatment) | 80,105 / 576,824 | same |
+| Exposed users (control / treatment) | 0 / 428,212 | same |
+| Content fingerprint, CSV vs. Parquet | equal | same |
+
+How the validation works:
+
+- **Schema.** The CSV header must contain exactly the 16 expected column names, each once. The Parquet column names, order and types are compared with the expectation.
+- **Parsing without rounding.** Every column is first read as DOUBLE. The four binary columns must then be exactly 0 or 1 before they are stored as INTEGER (see PROJECT_LOG, 2026-11-03, for why).
+- **Row counts.** The DuckDB row count of the CSV, the independent physical line count minus the header, and the Parquet row count must all agree.
+- **Counts verified earlier.** Total rows, group sizes, and conversion, visit and exposure counts per group must equal the values already recorded in this file and in `outputs/ab_test_results.json`.
+- **Content.** The CSV and the Parquet must have identical minimum and maximum per column, identical binary sums per group, and an identical content fingerprint (an order-independent sum of per-row DuckDB hashes over all 16 columns).
+- **Write safety.** The Parquet file is written under a temporary name and moved to its final name only if every check passes.
+
+Reproduce (from the project root, with `.venv` active):
+
+```bash
+python -m pytest tests/test_csv_to_parquet.py
+python src/ingestion/csv_to_parquet.py     # or: python -m src.ingestion.csv_to_parquet
+```
+
+`tests/test_csv_to_parquet.py` has 64 pytest tests on small synthetic CSV files: successful conversion, value and row-order preservation, invalid or duplicated column names, unparseable values, non-binary values, missing values, NaN / infinity, row-count and content mismatches, and existing-output handling. The full suite (217 tests) passed on the Mac.
+
+Limits:
+
+- The checks show that the Parquet file matches the CSV as parsed with this schema. They do not show that the dataset is correct, representative, or free of upstream problems.
+- The content fingerprint is an order-independent sum of hashes. It is a consistency check, not a cryptographic proof, and it does not check row order (the conversion preserves it).
+- The expected counts apply to this v2.1 file only.
+- The Parquet file and the CSV stay local and git-ignored. **No S3 upload, Snowflake load or dbt model exists yet**, so the "S3 object" row above is still TODO.
 
 ## Data Validation (Day 1, descriptive)
 
