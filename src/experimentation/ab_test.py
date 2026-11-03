@@ -78,7 +78,11 @@ def fetch_group_counts(data_path: Path) -> dict[int, dict[str, int]]:
     """Aggregate user counts and successes per treatment group inside DuckDB.
 
     Returns ``{0: {...}, 1: {...}}`` with keys ``n`` and one success count per
-    outcome. Raises ``ValueError`` if the data does not look as expected.
+    outcome. Raises ``ValueError`` if the data does not look as expected: an arm
+    other than 0/1, a missing value, or an outcome value that is not exactly 0 or
+    1. The binary check runs on the parsed (lossless) value, before the cast to an
+    integer used for the sum, because ``CAST`` rounds a fractional value instead of
+    refusing it.
     """
     con = duckdb.connect()
     try:
@@ -89,10 +93,10 @@ def fetch_group_counts(data_path: Path) -> dict[int, dict[str, int]]:
                 COUNT(*)                          AS n,
                 COUNT(conversion)                 AS conversion_non_null,
                 COUNT(visit)                      AS visit_non_null,
-                MIN(conversion)                   AS conversion_min,
-                MAX(conversion)                   AS conversion_max,
-                MIN(visit)                        AS visit_min,
-                MAX(visit)                        AS visit_max,
+                SUM(CASE WHEN conversion NOT IN (0, 1) THEN 1 ELSE 0 END)
+                                                  AS conversion_non_binary,
+                SUM(CASE WHEN visit NOT IN (0, 1) THEN 1 ELSE 0 END)
+                                                  AS visit_non_binary,
                 SUM(CAST(conversion AS BIGINT))   AS conversion_successes,
                 SUM(CAST(visit AS BIGINT))        AS visit_successes
             FROM read_csv_auto(?, header=true)
@@ -110,12 +114,16 @@ def fetch_group_counts(data_path: Path) -> dict[int, dict[str, int]]:
         )
 
     counts: dict[int, dict[str, int]] = {}
-    for (group, n, conv_nn, visit_nn, conv_min, conv_max, visit_min, visit_max,
+    for (group, n, conv_nn, visit_nn, conv_non_binary, visit_non_binary,
          conv_successes, visit_successes) in rows:
         if conv_nn != n or visit_nn != n:
             raise ValueError(f"Missing conversion/visit values in treatment group {group}")
-        if conv_min < 0 or conv_max > 1 or visit_min < 0 or visit_max > 1:
-            raise ValueError(f"conversion/visit must be 0 or 1 in treatment group {group}")
+        for outcome, offenders in (("conversion", conv_non_binary), ("visit", visit_non_binary)):
+            if offenders:
+                raise ValueError(
+                    f"{outcome} must be exactly 0 or 1 in treatment group {group}: "
+                    f"{int(offenders)} row(s) hold another value"
+                )
         counts[int(group)] = {
             "n": int(n),
             "conversion": int(conv_successes),
